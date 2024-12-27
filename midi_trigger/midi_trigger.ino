@@ -30,6 +30,7 @@ struct TriggerState {
     int trigger_time = 0;
     int last_sent = 0;
     int intensity = 0;
+    bool sent = false;
 };
 
 TriggerState triggerStates[2]; // One state object for each trigger
@@ -62,7 +63,7 @@ void loop() {
             }
             
             if (state.num_consecutive >= min_consecutive && 
-                (millis() - state.last_sent) >= ms_to_wait) {
+                (millis() - state.last_sent) >= ms_to_wait && !state.sent) {
                 
                 state.last_sent = millis();
                 
@@ -71,12 +72,14 @@ void loop() {
                 
                 if(BLEMidiServer.isConnected()) {
                     sendNote(notes[i], 127, 0);
+                    state.sent = true;
                 }
                 digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Toggle LED when sending note
                 state.intensity = 0;
             }
         } else {
             state.num_consecutive = 0;
+            state.sent = false;
         }
     }
 }
