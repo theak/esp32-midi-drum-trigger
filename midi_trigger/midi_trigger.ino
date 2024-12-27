@@ -19,13 +19,15 @@ const int notes[] = {SNARE_NOTE, KICK_NOTE};
 const int pins[] = {SNARE_PIN, KICK_PIN};
 const int NUM_TRIGGERS = sizeof(pins) / sizeof(pins[0]);
 
-// Enhanced trigger parameters with reduced latency
-const int TRIGGER_THRESHOLD[] = {200, 500}; // Different thresholds for snare and kick
-const int NOISE_THRESHOLD = 50;     // Ignore readings below this
-const int SLOPE_WINDOW = 3;         // Reduced window size for slope detection
-const int RETRIGGER_TIME = 150;     // Minimum ms between triggers
-const float VELOCITY_SCALING = 0.7f; // Scale factor for velocity sensitivity
-const int SLOPE_THRESHOLD = 30;      // Minimum increase between consecutive readings
+// Enhanced trigger parameters
+const int TRIGGER_THRESHOLD[] = {250, 750};  // Different thresholds for snare and kick
+const int NOISE_THRESHOLD = 50;              // Ignore readings below this
+const int SLOPE_WINDOW = 3;                  // Window size for slope detection
+const int RETRIGGER_TIME = 100;              // Minimum ms between triggers
+const float VELOCITY_SCALING = 0.7f;         // Scale factor for velocity sensitivity
+const int SLOPE_THRESHOLD = 30;              // Minimum increase between consecutive readings
+const float CROSSTALK_RATIO = 5.0f;         // Required ratio between direct hit and sympathetic vibration
+const int CROSSTALK_WINDOW = 15;             // ms to check for cross-talk
 
 // State tracking for each trigger
 struct TriggerState {
@@ -33,6 +35,8 @@ struct TriggerState {
     unsigned long lastTriggerTime = 0;
     int peakValue = 0;
     bool isTriggering = false;
+    int recentMax = 0;                      // Track recent maximum for cross-talk detection
+    unsigned long recentMaxTime = 0;        // When we last saw the maximum
 };
 
 TriggerState triggerStates[NUM_TRIGGERS];
@@ -75,13 +79,45 @@ bool detectRisingEdge(TriggerState& state, int currentValue) {
 
 // Calculate MIDI velocity based on initial slope
 int calculateVelocity(TriggerState& state) {
-    // Use the difference between newest and oldest reading for velocity
     float slopeMagnitude = state.lastReadings[0] - state.lastReadings[SLOPE_WINDOW-1];
     float velocity = slopeMagnitude * VELOCITY_SCALING;
     return constrain(map(velocity, 0, 1023, 0, 127), 1, 127);
 }
 
+// Check if this might be cross-talk from another trigger
+bool isCrossTalk(int triggerIndex, int currentValue, unsigned long currentTime) {
+    // Check all other triggers
+    for (int i = 0; i < NUM_TRIGGERS; i++) {
+        if (i == triggerIndex) continue;
+        
+        TriggerState& otherState = triggerStates[i];
+        
+        // If another trigger recently had a larger signal, this might be cross-talk
+        if ((currentTime - otherState.recentMaxTime) < CROSSTALK_WINDOW &&
+            otherState.recentMax > (currentValue * CROSSTALK_RATIO)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void loop() {
+    unsigned long currentTime = millis();
+    
+    // First pass: update recent maximums for all triggers
+    for (int i = 0; i < NUM_TRIGGERS; i++) {
+        TriggerState& state = triggerStates[i];
+        int currentValue = analogRead(pins[i]);
+        
+        // Update recent maximum if we see a larger value
+        if (currentValue > state.recentMax || 
+            (currentTime - state.recentMaxTime) > CROSSTALK_WINDOW) {
+            state.recentMax = currentValue;
+            state.recentMaxTime = currentTime;
+        }
+    }
+    
+    // Second pass: process triggers
     for (int i = 0; i < NUM_TRIGGERS; i++) {
         TriggerState& state = triggerStates[i];
         int currentValue = analogRead(pins[i]);
@@ -92,30 +128,32 @@ void loop() {
             continue;
         }
         
-        unsigned long currentTime = millis();
-        
         // Check if enough time has passed since last trigger
         if (currentTime - state.lastTriggerTime < RETRIGGER_TIME) {
             continue;
         }
         
-        // Rising edge detection
+        // Rising edge detection with cross-talk check
         if (!state.isTriggering && 
             currentValue > TRIGGER_THRESHOLD[i] && 
-            detectRisingEdge(state, currentValue)) {
-              int velocity = calculateVelocity(state);
-              if (BLEMidiServer.isConnected()) sendNote(notes[i], velocity, 0);
-              state.lastTriggerTime = currentTime;
-              state.isTriggering = true;
-              
-              digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-              
-              Serial.print("Trigger ");
-              Serial.print(i);
-              Serial.print(" Value: ");
-              Serial.print(currentValue);
-              Serial.print(" Velocity: ");
-              Serial.println(velocity);
+            detectRisingEdge(state, currentValue) &&
+            !isCrossTalk(i, currentValue, currentTime)) {
+            
+            if (BLEMidiServer.isConnected()) {
+                int velocity = calculateVelocity(state);
+                sendNote(notes[i], velocity, 0);
+                state.lastTriggerTime = currentTime;
+                state.isTriggering = true;
+                
+                digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+                
+                Serial.print("Trigger ");
+                Serial.print(i);
+                Serial.print(" Value: ");
+                Serial.print(currentValue);
+                Serial.print(" Velocity: ");
+                Serial.println(velocity);
+            }
         }
         
         // Reset trigger state when signal drops
