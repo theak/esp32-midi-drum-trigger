@@ -2,7 +2,7 @@
 #include <BLEMidi.h>
 #include <unordered_set>
 
-std::unordered_set<int> heldNotes; // Holds currently pressed notes
+std::unordered_set<int> heldNotes;
 
 // Pin definitions
 #define BUTTON_PIN 13
@@ -19,76 +19,117 @@ const int notes[] = {SNARE_NOTE, KICK_NOTE};
 const int pins[] = {SNARE_PIN, KICK_PIN};
 const int NUM_TRIGGERS = sizeof(pins) / sizeof(pins[0]);
 
-// Trigger parameters
-const int min_threshold = 75;
-const int min_consecutive = 4;
-const int ms_to_wait = 150;
+// Enhanced trigger parameters with reduced latency
+const int TRIGGER_THRESHOLD[] = {200, 500}; // Different thresholds for snare and kick
+const int NOISE_THRESHOLD = 50;     // Ignore readings below this
+const int SLOPE_WINDOW = 3;         // Reduced window size for slope detection
+const int RETRIGGER_TIME = 150;     // Minimum ms between triggers
+const float VELOCITY_SCALING = 0.7f; // Scale factor for velocity sensitivity
+const int SLOPE_THRESHOLD = 30;      // Minimum increase between consecutive readings
 
 // State tracking for each trigger
 struct TriggerState {
-    int num_consecutive = 0;
-    int trigger_time = 0;
-    int last_sent = 0;
-    int intensity = 0;
-    bool sent = false;
+    int lastReadings[SLOPE_WINDOW];
+    unsigned long lastTriggerTime = 0;
+    int peakValue = 0;
+    bool isTriggering = false;
 };
 
-TriggerState triggerStates[2]; // One state object for each trigger
+TriggerState triggerStates[NUM_TRIGGERS];
 
 void setup() {
     Serial.begin(9600);
     Serial.println("Initializing bluetooth");
     BLEMidiServer.begin("Esp32 MIDI device");
     Serial.println("Waiting for connections...");
-    //BLEMidiServer.enableDebugging(); // Uncomment for debug output from the library
     
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     pinMode(LED_PIN, OUTPUT);
+    
+    // Initialize reading arrays
+    for (int i = 0; i < NUM_TRIGGERS; i++) {
+        for (int j = 0; j < SLOPE_WINDOW; j++) {
+            triggerStates[i].lastReadings[j] = 0;
+        }
+    }
+}
+
+// Check for rapid rise in signal (positive slope)
+bool detectRisingEdge(TriggerState& state, int currentValue) {
+    // Shift readings
+    for (int i = SLOPE_WINDOW - 1; i > 0; i--) {
+        state.lastReadings[i] = state.lastReadings[i-1];
+    }
+    state.lastReadings[0] = currentValue;
+    
+    // Check for consistent rise
+    for (int i = 0; i < SLOPE_WINDOW - 1; i++) {
+        if (state.lastReadings[i] <= state.lastReadings[i+1] || 
+            (state.lastReadings[i] - state.lastReadings[i+1]) < SLOPE_THRESHOLD) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+// Calculate MIDI velocity based on initial slope
+int calculateVelocity(TriggerState& state) {
+    // Use the difference between newest and oldest reading for velocity
+    float slopeMagnitude = state.lastReadings[0] - state.lastReadings[SLOPE_WINDOW-1];
+    float velocity = slopeMagnitude * VELOCITY_SCALING;
+    return constrain(map(velocity, 0, 1023, 0, 127), 1, 127);
 }
 
 void loop() {
-    // Loop through all trigger pins
     for (int i = 0; i < NUM_TRIGGERS; i++) {
-        int val = analogRead(pins[i]);
         TriggerState& state = triggerStates[i];
+        int currentValue = analogRead(pins[i]);
         
-        if (val > min_threshold) {
-            Serial.println(state.num_consecutive);
-            if (state.num_consecutive == 0) {
-                state.trigger_time = millis();
-            }
-            state.num_consecutive += 1;
-            if (val > state.intensity) {
-                state.intensity = val;
-            }
-            
-            if (state.num_consecutive >= min_consecutive && 
-                (millis() - state.last_sent) >= ms_to_wait && !state.sent) {
-                
-                state.last_sent = millis();
-                
-                Serial.println("sending note");
-                Serial.println(notes[i]);
-                
-                if(BLEMidiServer.isConnected()) {
-                    sendNote(notes[i], 127, 0);
-                    state.sent = true;
-                }
-                digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Toggle LED when sending note
-                state.intensity = 0;
-            }
-        } else {
-            state.num_consecutive = 0;
-            state.sent = false;
+        // Ignore noise
+        if (currentValue < NOISE_THRESHOLD) {
+            state.isTriggering = false;
+            continue;
+        }
+        
+        unsigned long currentTime = millis();
+        
+        // Check if enough time has passed since last trigger
+        if (currentTime - state.lastTriggerTime < RETRIGGER_TIME) {
+            continue;
+        }
+        
+        // Rising edge detection
+        if (!state.isTriggering && 
+            currentValue > TRIGGER_THRESHOLD[i] && 
+            detectRisingEdge(state, currentValue)) {
+              int velocity = calculateVelocity(state);
+              if (BLEMidiServer.isConnected()) sendNote(notes[i], velocity, 0);
+              state.lastTriggerTime = currentTime;
+              state.isTriggering = true;
+              
+              digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+              
+              Serial.print("Trigger ");
+              Serial.print(i);
+              Serial.print(" Value: ");
+              Serial.print(currentValue);
+              Serial.print(" Velocity: ");
+              Serial.println(velocity);
+        }
+        
+        // Reset trigger state when signal drops
+        if (currentValue < TRIGGER_THRESHOLD[i]) {
+            state.isTriggering = false;
         }
     }
 }
 
 void sendNote(int note, int velocity, int channel) {
     if (heldNotes.find(note) == heldNotes.end()) {
-        BLEMidiServer.noteOff(channel, note, velocity);
         heldNotes.erase(note);
     }
     BLEMidiServer.noteOn(channel, note, velocity);
+    BLEMidiServer.noteOff(channel, note, velocity);
     heldNotes.insert(note);
 }
