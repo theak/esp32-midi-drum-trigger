@@ -20,16 +20,16 @@ const int pins[] = {SNARE_PIN, KICK_PIN};
 const int NUM_TRIGGERS = sizeof(pins) / sizeof(pins[0]);
 
 // Enhanced trigger parameters
-const int TRIGGER_THRESHOLD[] = {250, 1000};  // Different thresholds for snare and kick
+const int TRIGGER_THRESHOLD[] = {250, 1250};  // Different thresholds for snare and kick
 const int NOISE_THRESHOLD = 50;              // Ignore readings below this
 const int SLOPE_WINDOW = 3;                  // Window size for slope detection
 const int RETRIGGER_TIME = 75;              // Minimum ms between triggers
 const float VELOCITY_SCALING = 0.7f;         // Scale factor for velocity sensitivity
 const int SLOPE_THRESHOLD = 30;              // Minimum increase between consecutive readings
-const float CROSSTALK_RATIO = 8.0f;         // Required ratio between direct hit and sympathetic vibration
+const float CROSSTALK_RATIO = 10.0f;         // Required ratio between direct hit and sympathetic vibration
 const int CROSSTALK_WINDOW = 100;           // ms to check for cross-talk
-const float DYNAMIC_RATIO_SCALING = 0.005f;  // Increases ratio requirement for harder hits
-const int HIGH_INTENSITY_THRESHOLD = 1500;   // Level at which we start applying stricter checks
+const float DYNAMIC_RATIO_SCALING = 0.01f;  // Increases ratio requirement for harder hits
+const int HIGH_INTENSITY_THRESHOLD = 1000;   // Level at which we start applying stricter checks
 
 // State tracking for each trigger
 struct TriggerState {
