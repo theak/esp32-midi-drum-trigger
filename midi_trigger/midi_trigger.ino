@@ -13,8 +13,12 @@ std::unordered_set<int> heldNotes;
 // MIDI note definitions
 #define KICK_NOTE 36
 #define SNARE_NOTE 38
+#define AUX_NOTE 56
 
-// Array of pins and corresponding notes
+#define LED_DURATION_MS 50
+
+// Array of drums
+const char* drumNames[] = {"SD", "KD", "AX"};
 const int notes[] = {SNARE_NOTE, KICK_NOTE};
 const int pins[] = {SNARE_PIN, KICK_PIN};
 const int NUM_TRIGGERS = sizeof(pins) / sizeof(pins[0]);
@@ -42,6 +46,8 @@ struct TriggerState {
     bool inhibited = false;                 // Temporary inhibit flag for cross-talk
     unsigned long inhibitTime = 0;          // When the inhibit started
 };
+
+int ledOnTime = -1;
 
 TriggerState triggerStates[NUM_TRIGGERS];
 
@@ -124,6 +130,11 @@ bool isCrossTalk(int triggerIndex, int currentValue, unsigned long currentTime) 
 
 void loop() {
     unsigned long currentTime = millis();
+
+    if (ledOnTime > 0 && (currentTime - ledOnTime) > LED_DURATION_MS) {
+      ledOnTime = -1;
+      digitalWrite(LED_PIN, LOW);
+    }
     
     // First pass: update recent maximums for all triggers
     for (int i = 0; i < NUM_TRIGGERS; i++) {
@@ -176,7 +187,8 @@ void loop() {
                 state.lastTriggerTime = currentTime;
                 state.isTriggering = true;
                 
-                digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+                digitalWrite(LED_PIN, HIGH);
+                ledOnTime = currentTime;
                 
                 Serial.print("Trigger ");
                 Serial.print(i);
