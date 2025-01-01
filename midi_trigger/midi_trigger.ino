@@ -9,22 +9,24 @@ std::unordered_set<int> heldNotes;
 #define LED_PIN LED_BUILTIN
 #define SNARE_PIN 36
 #define KICK_PIN 39
+#define AUX_1_PIN 34
 
 // MIDI note definitions
 #define KICK_NOTE 36
 #define SNARE_NOTE 38
-#define AUX_NOTE 56
+#define AUX_1_NOTE 56
 
 #define LED_DURATION_MS 50
 
 // Array of drums
-const char* drumNames[] = {"SD", "KD", "AX"};
-const int notes[] = {SNARE_NOTE, KICK_NOTE};
-const int pins[] = {SNARE_PIN, KICK_PIN};
+const char* drumNames[] = {"SD", "KD", "A1", "A2"};
+const int notes[] = {SNARE_NOTE, KICK_NOTE, AUX_1_NOTE};
+const int pins[] = {SNARE_PIN, KICK_PIN, AUX_1_PIN};
+const int multiplier[] = {1, 1, 5};
+const int TRIGGER_THRESHOLD[] = {250, 1250, 2};
 const int NUM_TRIGGERS = sizeof(pins) / sizeof(pins[0]);
 
 // Enhanced trigger parameters
-const int TRIGGER_THRESHOLD[] = {250, 1250};  // Different thresholds for snare and kick
 const int NOISE_THRESHOLD = 50;              // Ignore readings below this
 const int SLOPE_WINDOW = 3;                  // Window size for slope detection
 const int RETRIGGER_TIME = 75;              // Minimum ms between triggers
@@ -139,7 +141,7 @@ void loop() {
     // First pass: update recent maximums for all triggers
     for (int i = 0; i < NUM_TRIGGERS; i++) {
         TriggerState& state = triggerStates[i];
-        int currentValue = analogRead(pins[i]);
+        int currentValue = analogRead(pins[i]) * multiplier[i];
         
         // Update recent maximum if we see a larger value
         if (currentValue > state.recentMax || 
@@ -157,7 +159,7 @@ void loop() {
     // Second pass: process triggers
     for (int i = 0; i < NUM_TRIGGERS; i++) {
         TriggerState& state = triggerStates[i];
-        int currentValue = analogRead(pins[i]);
+        int currentValue = analogRead(pins[i]) * multiplier[i];
         
         // Skip if trigger is currently inhibited
         if (state.inhibited) {
